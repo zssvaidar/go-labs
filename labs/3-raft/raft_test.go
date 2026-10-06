@@ -12,7 +12,7 @@ const electionTimeout = 1 * time.Second
 
 func newCluster(t *testing.T, n int, reliable bool) *Cluster {
 	t.Helper()
-	c := NewCluster(n, reliable)
+	c := NewCluster(n, reliable, false)
 	t.Cleanup(c.Cleanup)
 	return c
 }
@@ -35,7 +35,7 @@ func one(t *testing.T, c *Cluster, cmd any, expected int, retry bool) int {
 	return idx
 }
 
-func TestInitialElection(t *testing.T) {
+func TestInitialElection3A(t *testing.T) {
 	c := newCluster(t, 3, true)
 	checkOneLeader(t, c)
 
@@ -60,7 +60,7 @@ func TestInitialElection(t *testing.T) {
 	checkOneLeader(t, c)
 }
 
-func TestReElection(t *testing.T) {
+func TestReElection3A(t *testing.T) {
 	c := newCluster(t, 3, true)
 	leader1 := checkOneLeader(t, c)
 
@@ -88,7 +88,7 @@ func TestReElection(t *testing.T) {
 	checkOneLeader(t, c)
 }
 
-func TestManyElections(t *testing.T) {
+func TestManyElections3A(t *testing.T) {
 	const n = 7
 	c := newCluster(t, n, true)
 	checkOneLeader(t, c)
@@ -107,7 +107,7 @@ func TestManyElections(t *testing.T) {
 	checkOneLeader(t, c)
 }
 
-func TestBasicAgree(t *testing.T) {
+func TestBasicAgree3B(t *testing.T) {
 	const n = 3
 	c := newCluster(t, n, true)
 	for index := 1; index <= 3; index++ {
@@ -120,7 +120,7 @@ func TestBasicAgree(t *testing.T) {
 	}
 }
 
-func TestFollowerFailure(t *testing.T) {
+func TestFollowerFailure3B(t *testing.T) {
 	const n = 3
 	c := newCluster(t, n, true)
 	one(t, c, 101, n, false)
@@ -149,7 +149,7 @@ func TestFollowerFailure(t *testing.T) {
 	}
 }
 
-func TestFailAgree(t *testing.T) {
+func TestFailAgree3B(t *testing.T) {
 	const n = 3
 	c := newCluster(t, n, true)
 	one(t, c, 101, n, false)
@@ -167,7 +167,7 @@ func TestFailAgree(t *testing.T) {
 	one(t, c, 107, n, true)
 }
 
-func TestFailNoAgree(t *testing.T) {
+func TestFailNoAgree3B(t *testing.T) {
 	const n = 5
 	c := newCluster(t, n, true)
 	one(t, c, 10, n, false)
@@ -205,7 +205,7 @@ func TestFailNoAgree(t *testing.T) {
 	one(t, c, 1000, n, true)
 }
 
-func TestRejoin(t *testing.T) {
+func TestRejoin3B(t *testing.T) {
 	const n = 3
 	c := newCluster(t, n, true)
 	one(t, c, 101, n, true)
@@ -233,7 +233,7 @@ func TestRejoin(t *testing.T) {
 
 // TestBackup makes followers' logs diverge a lot so the leader has to back
 // up nextIndex quickly over many conflicting entries.
-func TestBackup(t *testing.T) {
+func TestBackup3B(t *testing.T) {
 	const n = 5
 	c := newCluster(t, n, true)
 	one(t, c, rand.Int(), n, true)
@@ -293,7 +293,7 @@ func TestBackup(t *testing.T) {
 	one(t, c, rand.Int(), n, true)
 }
 
-func TestPersist(t *testing.T) {
+func TestPersist3C(t *testing.T) {
 	const n = 3
 	c := newCluster(t, n, true)
 	one(t, c, 11, n, true)
@@ -334,7 +334,7 @@ func TestPersist(t *testing.T) {
 
 // TestUnreliableAgree submits commands concurrently while the network delays
 // and drops RPCs.
-func TestUnreliableAgree(t *testing.T) {
+func TestUnreliableAgree3C(t *testing.T) {
 	const n = 5
 	c := newCluster(t, n, false)
 
@@ -363,7 +363,7 @@ func TestUnreliableAgree(t *testing.T) {
 
 // TestCrashUnreliable randomly crashes, restarts, and partitions servers on
 // a lossy network, checking safety throughout.
-func TestCrashUnreliable(t *testing.T) {
+func TestCrashUnreliable3C(t *testing.T) {
 	const n = 5
 	c := newCluster(t, n, false)
 	one(t, c, rand.Int()%10000, 1, true)

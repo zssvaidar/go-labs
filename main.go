@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 
-	periodic "github.com/zssvaidar/go-labs/labs/1-periodic"
-	raft "github.com/zssvaidar/go-labs/labs/2-raft"
+	mr "github.com/zssvaidar/go-labs/labs/1-mapreduce"
+	kvsrv "github.com/zssvaidar/go-labs/labs/2-kvsrv"
+	raft "github.com/zssvaidar/go-labs/labs/3-raft"
+	kvraft "github.com/zssvaidar/go-labs/labs/4-kvraft"
+	"github.com/zssvaidar/go-labs/labs/5-shardkv/shardkv"
 )
 
 type lab struct {
@@ -13,23 +16,33 @@ type lab struct {
 	run  func()
 }
 
-var labs = map[string]lab{
-	"1": {"periodic: cancel a goroutine with a mutex-protected flag", periodic.Run},
-	"2": {"raft: leader election, log replication, crashes", raft.Demo},
+// The labs of MIT 6.5840 (Distributed Systems), in order.
+var labs = []lab{
+	{"mapreduce: coordinator and workers, surviving worker crashes", mr.Demo},
+	{"kvsrv: key/value server with at-most-once semantics on a lossy network", kvsrv.Demo},
+	{"raft: leader election, log replication, persistence, snapshots", raft.Demo},
+	{"kvraft: fault-tolerant key/value service on Raft", kvraft.Demo},
+	{"shardkv: sharded key/value service with shard migration", shardkv.Demo},
 }
 
 func main() {
-	id := "1"
-	if len(os.Args) > 1 {
-		id = os.Args[1]
+	if len(os.Args) < 2 {
+		usage()
+		return
 	}
-	l, ok := labs[id]
-	if !ok {
-		fmt.Fprintf(os.Stderr, "unknown lab %q, available:\n", id)
-		for _, k := range []string{"1", "2"} {
-			fmt.Fprintf(os.Stderr, "  %s  %s\n", k, labs[k].name)
-		}
+	var n int
+	if _, err := fmt.Sscan(os.Args[1], &n); err != nil || n < 1 || n > len(labs) {
+		fmt.Fprintf(os.Stderr, "unknown lab %q\n\n", os.Args[1])
+		usage()
 		os.Exit(1)
 	}
-	l.run()
+	labs[n-1].run()
+}
+
+func usage() {
+	fmt.Println("usage: go run . <lab>")
+	fmt.Println()
+	for i, l := range labs {
+		fmt.Printf("  %d  %s\n", i+1, l.name)
+	}
 }

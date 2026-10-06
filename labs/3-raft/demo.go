@@ -10,7 +10,7 @@ import (
 // Demo walks a 5-server cluster through the scenarios from the lecture:
 // election, replication, leader crash, losing the majority, and recovery.
 func Demo() {
-	c := NewCluster(5, true)
+	c := NewCluster(5, true, false)
 	defer c.Cleanup()
 	start := time.Now()
 
@@ -102,7 +102,7 @@ func (c *Cluster) PrintStatus() {
 		}
 		s := rf.Status()
 		var entries []string
-		for _, e := range s.Log[1:] {
+		for _, e := range s.Log {
 			entries = append(entries, fmt.Sprintf("%d:%v", e.Term, e.Command))
 		}
 		net := ""

@@ -1,24 +1,26 @@
-# Lab 2: Raft
+# Lab 3: Raft
 
 A Raft implementation in Go, following Figure 2 of the
 [Raft paper](https://raft.github.io/raft.pdf) and the MIT 6.5840 lab.
 
 ```sh
-go run . 2                          # demo: election, replication, crashes
-go test -race ./labs/2-raft/        # full test suite (~1 min)
-go test -race -run Election ./labs/2-raft/
+go run . 3                          # demo: election, replication, crashes
+go test -race ./labs/3-raft/        # full test suite (~3 min)
+go test -race -run 3D ./labs/3-raft/  # one part: 3A, 3B, 3C, or 3D
 ```
 
 ## Files
 
 | File | What it is |
 |------|------------|
-| `raft.go` | The algorithm: election, `AppendEntries`, commit, persistence |
-| `network.go` | Fake network: disconnect servers, drop and delay RPCs |
-| `persister.go` | Fake disk that survives a crash |
+| `raft.go` | The algorithm: election, `AppendEntries`, commit, persistence, snapshots |
 | `cluster.go` | Test harness: runs N servers, checks they all apply the same log |
-| `demo.go` | The `go run . 2` walkthrough |
-| `raft_test.go` | Tests modeled on the MIT lab's |
+| `demo.go` | The `go run . 3` walkthrough |
+| `raft_test.go` | Tests for parts 3A–3C, modeled on the MIT lab's |
+| `snapshot_test.go` | Tests for part 3D |
+
+Servers talk through `internal/labrpc` (the simulated network) and save
+state to `internal/tester`'s `Persister` (the simulated disk).
 
 ## How it maps to the paper
 
@@ -59,8 +61,15 @@ leader.
 - After any RPC returns, re-check `state` and `currentTerm` before using the
   reply. The world may have changed while you waited.
 
+**Snapshots (§7, part 3D).** The service calls `Snapshot(index, data)` once
+it has saved its state up to `index`. Raft drops the log up to there and
+keeps the snapshot instead. `log[0]` then stands for the snapshot's last
+entry, and every index is offset by `lastIncludedIndex`. A follower so far
+behind that the leader has already discarded the entries it needs gets
+`InstallSnapshot` instead of `AppendEntries`. Raft passes the snapshot up to
+the service on `applyCh`.
+
 ## Not implemented
 
-- Snapshots / log compaction (6.5840 lab 3D)
 - PreVote. In the demo, servers that were cut off come back with an inflated
   term and force an unnecessary election.

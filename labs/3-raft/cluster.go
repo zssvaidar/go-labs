@@ -1,40 +1,69 @@
 package raft
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
+	"log"
 	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/zssvaidar/go-labs/internal/labrpc"
+	"github.com/zssvaidar/go-labs/internal/tester"
 )
 
-// Cluster runs n Raft servers on a simulated network and records what each
-// one applies, so the demo and the tests can crash, disconnect, and restart
+// SnapshotInterval is how often (in log entries) a cluster created with
+// snapshots asks each server to snapshot.
+const SnapshotInterval = 10
+
+// Cluster runs n Raft servers on a labrpc network and records what each one
+// applies, so the demo and the tests can crash, disconnect, and restart
 // servers and then check that they all agree.
 type Cluster struct {
-	mu         sync.Mutex
-	n          int
-	net        *Network
-	rafts      []*Raft
-	persisters []*Persister
-	applied    []map[int]any // per server: log index -> command
-	applyErr   string        // first safety violation seen, if any
+	mu        sync.Mutex
+	n         int
+	net       *labrpc.Network
+	group     *tester.Group
+	rafts     []*Raft
+	applied   []map[int]any // per server: log index -> command
+	applyErr  string        // first safety violation seen, if any
+	snapshots bool
 }
 
-func NewCluster(n int, reliable bool) *Cluster {
+// NewCluster starts n connected servers. With snapshots, each server acts
+// like a service that snapshots its state every SnapshotInterval entries.
+func NewCluster(n int, reliable, snapshots bool) *Cluster {
 	c := &Cluster{
-		n:          n,
-		net:        NewNetwork(n),
-		rafts:      make([]*Raft, n),
-		persisters: make([]*Persister, n),
-		applied:    make([]map[int]any, n),
+		n:         n,
+		net:       labrpc.MakeNetwork(),
+		rafts:     make([]*Raft, n),
+		applied:   make([]map[int]any, n),
+		snapshots: snapshots,
 	}
-	c.net.SetReliable(reliable)
-	for i := 0; i < n; i++ {
-		c.persisters[i] = NewPersister()
+	for i := range c.applied {
 		c.applied[i] = map[int]any{}
-		c.Restart(i)
 	}
+	c.net.Reliable(reliable)
+	c.group = tester.NewGroup(c.net, "raft", n, c.startServer)
+	c.group.StartServers()
 	return c
+}
+
+func (c *Cluster) startServer(ends []*labrpc.ClientEnd, me int, persister *tester.Persister) []tester.IService {
+	lastApplied := 0
+	if c.snapshots {
+		if snap := persister.ReadSnapshot(); len(snap) > 0 {
+			lastApplied = c.ingestSnapshot(me, snap)
+		}
+	}
+	applyCh := make(chan ApplyMsg)
+	rf := Make(ends, me, persister, applyCh)
+	c.mu.Lock()
+	c.rafts[me] = rf
+	c.mu.Unlock()
+	go c.collect(me, rf, applyCh, lastApplied)
+	return []tester.IService{rf}
 }
 
 func (c *Cluster) N() int { return c.n }
@@ -45,40 +74,26 @@ func (c *Cluster) Raft(i int) *Raft {
 	return c.rafts[i]
 }
 
-func (c *Cluster) Connect(i int)          { c.net.Connect(i) }
-func (c *Cluster) Disconnect(i int)       { c.net.Disconnect(i) }
-func (c *Cluster) IsConnected(i int) bool { return c.net.IsConnected(i) }
-func (c *Cluster) SetReliable(r bool)     { c.net.SetReliable(r) }
-func (c *Cluster) RPCCount() int          { return c.net.RPCCount() }
+func (c *Cluster) Connect(i int)          { c.group.Connect(i) }
+func (c *Cluster) Disconnect(i int)       { c.group.Disconnect(i) }
+func (c *Cluster) IsConnected(i int) bool { return c.group.IsConnected(i) }
+func (c *Cluster) SetReliable(r bool)     { c.net.Reliable(r) }
+func (c *Cluster) RPCCount() int          { return c.net.GetTotalCount() }
+func (c *Cluster) MaxLogSize() int        { return c.group.MaxRaftStateSize() }
 
 // Crash kills server i. Only what it saved in its persister survives.
 func (c *Cluster) Crash(i int) {
-	c.net.Disconnect(i)
-	c.net.detach(i)
 	c.mu.Lock()
-	rf := c.rafts[i]
 	c.rafts[i] = nil
-	// The dead instance's goroutines may still write to the old persister;
-	// give the next instance a snapshot of it instead.
-	c.persisters[i] = c.persisters[i].Copy()
 	c.mu.Unlock()
-	if rf != nil {
-		rf.Kill()
-	}
+	c.group.ShutdownServer(i)
 }
 
 // Restart crashes server i if it is running, then boots a new instance from
 // its persisted state and connects it.
 func (c *Cluster) Restart(i int) {
 	c.Crash(i)
-	applyCh := make(chan ApplyMsg)
-	c.mu.Lock()
-	rf := Make(c.net, i, c.persisters[i], applyCh)
-	c.rafts[i] = rf
-	c.mu.Unlock()
-	go c.collect(i, applyCh)
-	c.net.attach(i, rf)
-	c.net.Connect(i)
+	c.group.StartServer(i)
 }
 
 // Cleanup kills every server.
@@ -88,30 +103,85 @@ func (c *Cluster) Cleanup() {
 	}
 }
 
-// collect records everything server i applies and checks the two safety
-// rules: all servers apply the same command at an index, and each server
-// applies indexes in order.
-func (c *Cluster) collect(i int, applyCh chan ApplyMsg) {
+// collect plays the service on top of server i: it records what Raft
+// applies, checks the safety rules, and takes and installs snapshots.
+func (c *Cluster) collect(i int, rf *Raft, applyCh chan ApplyMsg, lastApplied int) {
 	for m := range applyCh {
-		if !m.CommandValid {
-			continue
-		}
-		c.mu.Lock()
-		for j, logs := range c.applied {
-			if old, ok := logs[m.CommandIndex]; ok && old != m.Command {
-				c.fail("index %d: server %d applied %v but server %d applied %v",
-					m.CommandIndex, i, m.Command, j, old)
+		switch {
+		case m.SnapshotValid:
+			if !c.snapshots {
+				c.fail("server %d got a snapshot but snapshots are off", i)
+				continue
+			}
+			if idx := c.ingestSnapshot(i, m.Snapshot); idx != m.SnapshotIndex {
+				c.fail("server %d: snapshot says index %d, ApplyMsg says %d", i, idx, m.SnapshotIndex)
+			}
+			lastApplied = m.SnapshotIndex
+		case m.CommandValid:
+			if m.CommandIndex != lastApplied+1 {
+				c.fail("server %d applied index %d after %d", i, m.CommandIndex, lastApplied)
+			}
+			lastApplied = m.CommandIndex
+			c.mu.Lock()
+			c.record(i, m.CommandIndex, m.Command)
+			c.mu.Unlock()
+			if c.snapshots && m.CommandIndex%SnapshotInterval == 0 {
+				rf.Snapshot(m.CommandIndex, c.encodeSnapshot(i, m.CommandIndex))
 			}
 		}
-		if _, ok := c.applied[i][m.CommandIndex-1]; m.CommandIndex > 1 && !ok {
-			c.fail("server %d applied index %d before %d", i, m.CommandIndex, m.CommandIndex-1)
-		}
-		c.applied[i][m.CommandIndex] = m.Command
-		c.mu.Unlock()
 	}
 }
 
+// record saves that server i applied cmd at index, checking that no other
+// server applied something different there. Called with c.mu held.
+func (c *Cluster) record(i, index int, cmd any) {
+	for j, logs := range c.applied {
+		if old, ok := logs[index]; ok && old != cmd {
+			c.failLocked("index %d: server %d applied %v but server %d applied %v",
+				index, i, cmd, j, old)
+		}
+	}
+	c.applied[i][index] = cmd
+}
+
+// A test snapshot is just every command applied so far.
+func (c *Cluster) encodeSnapshot(i, upTo int) []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cmds := make([]any, upTo)
+	for idx := 1; idx <= upTo; idx++ {
+		cmds[idx-1] = c.applied[i][idx]
+	}
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	if e.Encode(upTo) != nil || e.Encode(cmds) != nil {
+		log.Fatalf("encode snapshot")
+	}
+	return w.Bytes()
+}
+
+func (c *Cluster) ingestSnapshot(i int, data []byte) int {
+	d := gob.NewDecoder(bytes.NewBuffer(data))
+	var upTo int
+	var cmds []any
+	if d.Decode(&upTo) != nil || d.Decode(&cmds) != nil {
+		log.Fatalf("decode snapshot")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for idx, cmd := range cmds {
+		c.record(i, idx+1, cmd)
+	}
+	return upTo
+}
+
 func (c *Cluster) fail(format string, args ...any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.failLocked(format, args...)
+}
+
+func (c *Cluster) failLocked(format string, args ...any) {
 	if c.applyErr == "" {
 		c.applyErr = fmt.Sprintf(format, args...)
 	}

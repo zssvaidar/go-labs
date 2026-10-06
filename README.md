@@ -1,17 +1,37 @@
 # go-labs
 
-Learning project for Go concurrency and distributed systems, following MIT 6.5840.
+My solutions to the labs of MIT 6.5840 (Distributed Systems, formerly
+6.824), in Go. Each lab builds on the previous ones.
+
+| # | Lab | What it is | Key ideas |
+|---|-----|------------|-----------|
+| 1 | [MapReduce](labs/1-mapreduce) | Coordinator hands map/reduce tasks to workers over RPC | Re-issuing tasks from crashed or slow workers, atomic output files |
+| 2 | [Key/value server](labs/2-kvsrv) | One server, clients on a lossy network | At-most-once semantics: a retried request applies only once |
+| 3 | [Raft](labs/3-raft) | Consensus: election, replication, persistence, snapshots | The heart of the course |
+| 4 | [Fault-tolerant KV](labs/4-kvraft) | Lab 2's service replicated with Raft | Replicated state machines, linearizable reads |
+| 5 | [Sharded KV](labs/5-shardkv) | Keys split across many Raft groups | Moving shards between groups while serving |
 
 ## Run
 
 ```sh
-go run .        # runs lab 1
-go run . 2      # runs a lab by number
-go run -race .  # check for data races
-go test -race ./...
+go run .            # list the labs
+go run . 3          # demo of lab 3 (Raft)
+go test -race ./... # every lab's tests (~8 minutes)
+go test -race ./labs/3-raft/ -run 3A   # one part of a lab
 ```
 
-## Labs
+## Layout
 
-1. `labs/1-periodic` — stop a periodic goroutine using a mutex-protected `done` flag.
-2. `labs/2-raft` — Raft consensus: leader election, log replication, commit, crashes and restarts. See [its README](labs/2-raft/README.md).
+```
+internal/labrpc   simulated network: drops, delays, partitions (labs 2-5)
+internal/tester   starts, crashes, restarts, and partitions server groups
+labs/1-mapreduce  lab 1 (real net/rpc over a Unix socket)
+labs/2-kvsrv      lab 2
+labs/3-raft       lab 3
+labs/4-kvraft     lab 4, plus rsm/: generic "replicate any state machine" layer
+labs/5-shardkv    lab 5: shardctrler/ (5A) and shardkv/ (5B)
+```
+
+Everything runs in one process: servers are goroutines, and the "network"
+is `internal/labrpc`, which copies every message through gob (so servers
+never share memory) and can lose or delay any of them.
