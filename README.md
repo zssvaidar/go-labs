@@ -11,6 +11,9 @@ My solutions to the labs of MIT 6.5840 (Distributed Systems, formerly
 | 4 | [Fault-tolerant KV](labs/4-kvraft) | Lab 2's service replicated with Raft | Replicated state machines, linearizable reads |
 | 5 | [Sharded KV](labs/5-shardkv) | Keys split across many Raft groups | Moving shards between groups while serving |
 
+**Learning the code?** Start with the [learning guide](docs/learn/README.md):
+Go concepts first, then each lab's key ideas with the code explained.
+
 ## Run
 
 ```sh
