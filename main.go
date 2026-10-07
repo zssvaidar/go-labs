@@ -1,48 +1,42 @@
+// Command echo-api is a starter HTTP API built on the Echo framework.
 package main
 
 import (
-	"fmt"
+	"context"
+	"errors"
+	"log"
+	"net/http"
 	"os"
-
-	mr "github.com/zssvaidar/go-labs/labs/1-mapreduce"
-	kvsrv "github.com/zssvaidar/go-labs/labs/2-kvsrv"
-	raft "github.com/zssvaidar/go-labs/labs/3-raft"
-	kvraft "github.com/zssvaidar/go-labs/labs/4-kvraft"
-	"github.com/zssvaidar/go-labs/labs/5-shardkv/shardkv"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
-type lab struct {
-	name string
-	run  func()
-}
-
-// The labs of MIT 6.5840 (Distributed Systems), in order.
-var labs = []lab{
-	{"mapreduce: coordinator and workers, surviving worker crashes", mr.Demo},
-	{"kvsrv: key/value server with at-most-once semantics on a lossy network", kvsrv.Demo},
-	{"raft: leader election, log replication, persistence, snapshots", raft.Demo},
-	{"kvraft: fault-tolerant key/value service on Raft", kvraft.Demo},
-	{"shardkv: sharded key/value service with shard migration", shardkv.Demo},
-}
-
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		return
+	addr := ":" + envOr("PORT", "8080")
+	e := newServer()
+
+	go func() {
+		if err := e.Start(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server: %v", err)
+		}
+	}()
+
+	// Wait for Ctrl+C or SIGTERM, then give in-flight requests time to finish.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := e.Shutdown(shutdownCtx); err != nil {
+		log.Fatalf("shutdown: %v", err)
 	}
-	var n int
-	if _, err := fmt.Sscan(os.Args[1], &n); err != nil || n < 1 || n > len(labs) {
-		fmt.Fprintf(os.Stderr, "unknown lab %q\n\n", os.Args[1])
-		usage()
-		os.Exit(1)
-	}
-	labs[n-1].run()
 }
 
-func usage() {
-	fmt.Println("usage: go run . <lab>")
-	fmt.Println()
-	for i, l := range labs {
-		fmt.Printf("  %d  %s\n", i+1, l.name)
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
+	return def
 }
